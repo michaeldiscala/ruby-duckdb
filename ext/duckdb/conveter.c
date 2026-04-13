@@ -141,6 +141,66 @@ VALUE rbduckdb_uuid_uhugeint_to_ruby(duckdb_uhugeint h) {
     return rb_utf8_str_new(buf, 36);
 }
 
+/* Returns the nibble value (0-15) for a hex character, or -1 if invalid. */
+static int hex_nibble(unsigned char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/*
+ * Parse a canonical UUID string ("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx") into
+ * a duckdb_hugeint. Returns 0 on success, -1 on invalid input.
+ *
+ * Iterates the 36-character string, skipping the four dash positions. The 32
+ * hex nibbles are accumulated directly into two uint64_t halves (hi, lo) with
+ * no bignum arithmetic or intermediate allocation. The sign-bit flip is applied
+ * to hi before storing in upper, matching DuckDB's internal UUID representation.
+ */
+static int uuid_str_to_hugeint(const char *str, long len, duckdb_hugeint *out)
+{
+    /* Expected format: 8-4-4-4-12 = 36 characters with dashes at fixed positions */
+    if (len != 36 ||
+        str[8] != '-' || str[13] != '-' || str[18] != '-' || str[23] != '-') {
+        return -1;
+    }
+
+    uint64_t hi = 0, lo = 0;
+    int nibble_idx = 0;
+
+    for (int string_idx = 0; string_idx < 36; string_idx++) {
+        if (string_idx == 8 || string_idx == 13 || string_idx == 18 || string_idx == 23) continue;
+        int nib = hex_nibble((unsigned char)str[string_idx]);
+        if (nib < 0) return -1;
+        if (nibble_idx < 16) {
+            hi = (hi << 4) | (uint64_t)nib;
+        } else {
+            lo = (lo << 4) | (uint64_t)nib;
+        }
+        nibble_idx++;
+    }
+
+    /* Apply the sign-bit flip to match DuckDB's internal UUID representation */
+    out->upper = (int64_t)(hi ^ 0x8000000000000000ULL);
+    out->lower = lo;
+    return 0;
+}
+
+/*
+ * Ruby-callable wrapper: parse a UUID string VALUE into a duckdb_hugeint,
+ * raising ArgumentError on invalid input. Returns the hugeint via out param.
+ */
+void rbduckdb_uuid_str_to_hugeint(VALUE uuid_str, duckdb_hugeint *out)
+{
+    const char *str = StringValueCStr(uuid_str);
+    long len = RSTRING_LEN(uuid_str);
+    if (uuid_str_to_hugeint(str, len, out) != 0) {
+        rb_raise(rb_eArgError, "Invalid UUID format: %s", str);
+    }
+}
+
 VALUE rbduckdb_interval_to_ruby(duckdb_interval i) {
     return rb_funcall(mDuckDBConverter, id__to_interval_from_vector, 3,
                       INT2NUM(i.months),

@@ -140,18 +140,6 @@ module DuckDB
       Interval.new(interval_months: months, interval_days: days, interval_micros: micros)
     end
 
-    def _uuid_string_to_hugeint(uuid_str)
-      hex = uuid_str.to_s.delete('-')
-      raise ArgumentError, "Invalid UUID format: #{uuid_str.inspect}" unless /\A\h{32}\z/.match?(hex)
-
-      value = hex.to_i(16)
-      upper = value >> HALF_HUGEINT_BIT
-      lower = value & LOWER_HUGEINT_MASK
-      upper ^= FLIP_HUGEINT
-      # Convert to signed int64 range (duckdb_hugeint.upper is int64_t)
-      upper -= HALF_HUGEINT if upper >= FLIP_HUGEINT
-      [lower, upper]
-    end
 
     def _parse_date(value)
       case value
